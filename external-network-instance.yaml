@@ -1,0 +1,86 @@
+---
+- name: Configure everything needed to deploy Cirros image
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Download Cirros
+      get_url:
+        url: https://download.cirros-cloud.net/0.5.1/cirros-0.5.1-x86_64-disk.img
+        dest: /home/stack/
+        mode: "0666"
+      register: imagename    
+                   
+    - name: Create tiny flavor
+      os_nova_flavor:
+        name: tiny
+        disk: 1
+        ram: 256
+        state: present
+        vcpus: 1
+
+    - name: Import Cirros image
+      os_image:
+        name: cirros
+        container_format: bare
+        disk_format: qcow2
+        state: present
+        filename: "{{imagename.dest}}"
+
+    - name: Create ext network
+      os_network:
+        state: present
+        external: true
+        name: ext_network
+        provider_network_type: flat
+        provider_physical_network: datacentre
+
+    - name: Create ext subnet
+      os_subnet:
+        state: present
+        network_name: ext_network
+        name: ext_network_subnet
+        enable_dhcp: True
+        allocation_pool_start: 10.0.0.150
+        allocation_pool_end: 10.0.0.250
+        gateway_ip: 10.0.0.1
+        cidr: 10.0.0.0/24
+        dns_nameservers:
+          - 1.1.1.1
+          - 8.8.8.8
+
+    - name: Create SG
+      os_security_group:
+        state: present
+        name: cirros_test_sg
+
+    - name: Create SG rules
+      os_security_group_rule:
+        security_group: cirros_test_sg
+        protocol: "{{ item }}"
+        remote_ip_prefix: 0.0.0.0/0
+      loop:
+        - tcp
+        - icmp
+        - udp
+
+    - name: Generate key
+      openssh_keypair:
+        path: /home/stack/admin_key
+
+    - name: Upload key
+      os_keypair:
+        name: server_admin_key
+        state: present
+        public_key_file: /home/stack/admin_key.pub
+
+
+    - name: Create server
+      os_server:
+        state: present
+        name: cirros-external
+        image: cirros
+        key_name: server_admin_key
+        timeout: "200"
+        flavor: tiny
+        security_groups: cirros_test_sg
+        network: ext_network

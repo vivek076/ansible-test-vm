@@ -1,0 +1,116 @@
+---
+- name: Configure everything needed to deploy RHEL instance
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Download RHEL
+      get_url:
+        url: https://access.cdn.redhat.com/content/origin/files/sha256/9b/9b63267716fa557f76df4899fb6a591c4c8a6ae2828f6297458815bff55ce8cc/rhel-8.5-x86_64-kvm.qcow2?user=f427e0f4c83fecd60ced55b0f1057cfb&_auth_=1646600693_db81ddb4f4b77aa5abf518713d71264c
+        dest: /home/stack/
+        mode: "0666"
+      register: imagename    
+                   
+    - name: Create large flavor
+      os_nova_flavor:
+        name: large
+        disk: 10
+        ram: 2048
+        state: present
+        vcpus: 1
+
+    - name: Import RHEL image
+      os_image:
+        name: rhel
+        container_format: bare
+        disk_format: qcow2
+        state: present
+        filename: "{{imagename.dest}}"
+
+    - name: Create ext network
+      os_network:
+        state: present
+        external: true
+        name: ext_network
+        provider_network_type: flat
+        provider_physical_network: datacentre
+
+    - name: Create ext subnet
+      os_subnet:
+        state: present
+        network_name: ext_network
+        name: ext_network_subnet
+        enable_dhcp: True
+        allocation_pool_start: 10.0.0.150
+        allocation_pool_end: 10.0.0.250
+        gateway_ip: 10.0.0.1
+        cidr: 10.0.0.0/24
+        dns_nameservers:
+          - 1.1.1.1
+          - 8.8.8.8
+          
+    - name: Create private network
+      os_network:
+        state: present
+        external: true
+        name: pri_network
+
+    - name: Create private subnet
+      os_subnet:
+        state: present
+        network_name: pri_network
+        name: pri_network_subnet
+        gateway_ip: 172.20.1.254
+        cidr: 172.20.1.0/24
+ 
+    - name: Create router for pri_network and ext_network
+      os_router:
+        state: present
+        name: router
+        network: ext_network
+        interfaces:
+          - pri_network_subnet
+
+    - name: Create SG
+      os_security_group:
+        state: present
+        name: rhel_test_sg
+
+    - name: Create SG rules
+      os_security_group_rule:
+        security_group: rhel_test_sg
+        protocol: "{{ item }}"
+        remote_ip_prefix: 0.0.0.0/0
+      loop:
+        - tcp
+        - icmp
+        - udp
+
+    - name: Generate key
+      openssh_keypair:
+        path: /home/stack/admin_key
+
+    - name: Upload key
+      os_keypair:
+        name: server_admin_key
+        state: present
+        public_key_file: /home/stack/admin_key.pub
+        
+    - name: Create server
+      os_server:
+        state: present
+        name: rhel-floating_ip
+        image: rhel
+        key_name: server_admin_key
+        timeout: "200"
+        flavor: large
+        security_groups: rhel_test_sg
+        network: pri_network
+
+    - name: Create and attach floating IP
+      os_floating_ip:
+         state: present
+         reuse: yes
+         server: rhel-floating_ip
+         network: ext_network
+         wait: true
+         timeout: 180
